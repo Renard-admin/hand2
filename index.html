@@ -73,6 +73,17 @@
       padding: 10px;
       border-radius: 5px;
     }
+
+    #permission {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0,0,0,0.8);
+      padding: 20px;
+      border-radius: 8px;
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -81,8 +92,12 @@
     <canvas id="output"></canvas>
     <canvas id="drawLayer"></canvas>
     
+    <div id="permission">
+      <button id="requestCamera">Включить камеру</button>
+    </div>
+    
     <div id="ui">
-      <button class="gesture-btn" data-mode="draw">Рисование</button>
+      <button class="gesture-btn active" data-mode="draw">Рисование</button>
       <button class="gesture-btn" data-mode="erase">Ластик</button>
       <button class="gesture-btn" data-mode="clear">Очистить</button>
       <input type="color" id="colorPicker" value="#ff0000">
@@ -114,6 +129,7 @@
     let currentColor = '#ff0000';
     let currentSize = 5;
     let isEraser = false;
+    let cameraStream = null;
 
     // Настройки Mediapipe
     const handsConfig = {
@@ -123,31 +139,39 @@
       minTrackingConfidence: 0.7
     };
 
-    // Инициализация
-    async function init() {
-      // Настройка камеры
+    // Запрос доступа к камере
+    document.getElementById('requestCamera').addEventListener('click', async () => {
+      try {
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        video.srcObject = cameraStream;
+        document.getElementById('permission').style.display = 'none';
+        initPipeline();
+      } catch (err) {
+        console.error('Ошибка доступа к камере:', err);
+        alert('Для работы приложения необходим доступ к камере');
+      }
+    });
+
+    // Инициализация Mediapipe
+    async function initPipeline() {
+      // Инициализация камеры через Mediapipe
       camera = new Camera(video, {
         onFrame: async () => {
-          if (!hands) return;
-          await hands.send({ image: video });
+          if (hands) await hands.send({ image: video });
         },
         width: 1280,
         height: 720
       });
       await camera.start();
 
-      // Настройка MediaPipe Hands
+      // Инициализация MediaPipe Hands
       hands = new Hands({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
       });
       hands.setOptions(handsConfig);
       hands.onResults(onResults);
 
-      // Инициализация canvas
-      resizeCanvas();
-      window.addEventListener('resize', resizeCanvas);
-
-      // Обработчики UI
+      // Инициализация UI
       document.querySelectorAll('.gesture-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
           document.querySelectorAll('.gesture-btn').forEach(b => b.classList.remove('active'));
@@ -325,8 +349,8 @@
 
     // Вспомогательные функции
     function resizeCanvas() {
-      outputCanvas.width = video.videoWidth;
-      outputCanvas.height = video.videoHeight;
+      outputCanvas.width = video.videoWidth || window.innerWidth;
+      outputCanvas.height = video.videoHeight || window.innerHeight;
       drawCanvas.width = outputCanvas.width;
       drawCanvas.height = outputCanvas.height;
     }
@@ -344,6 +368,15 @@
       gestureHint.textContent = `Жест распознан: ${gesture === 'activate' ? 'Рисование' : 'Очистка'}`;
       gestureHint.style.display = 'block';
       setTimeout(() => gestureHint.style.display = 'none', 1000);
+    }
+
+    // Инициализация
+    function init() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        alert('Ваш браузер не поддерживает доступ к камере');
+        return;
+      }
+      document.getElementById('permission').style.display = 'block';
     }
 
     init();
