@@ -1,171 +1,352 @@
 <!DOCTYPE html>
-<html>
+<html lang="ru">
 <head>
-    <title>Hand Gesture Drawing</title>
-    <style>
-        body {
-            margin: 0;
-            overflow: hidden;
-        }
-        #video {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-        #canvas {
-            position: absolute;
-            top: 0;
-            left: 0;
-            pointer-events: none;
-        }
-        #gestureStatus {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: white;
-            font-size: 20px;
-            z-index: 10;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Распознавание жестов</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+    }
+
+    #container {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transform: scaleX(-1);
+    }
+
+    #ui {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.6);
+      padding: 15px 25px;
+      border-radius: 8px;
+      display: flex;
+      gap: 20px;
+      z-index: 10;
+    }
+
+    .gesture-btn {
+      background: none;
+      border: 2px solid #4CAF50;
+      color: white;
+      padding: 8px 16px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: 0.3s;
+    }
+
+    .gesture-btn.active {
+      background: #4CAF50;
+    }
+
+    #gesture-hint {
+      position: absolute;
+      top: 20px;
+      right: 20px;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 15px;
+      border-radius: 5px;
+      display: none;
+    }
+
+    #color-picker {
+      position: absolute;
+      top: 70px;
+      right: 20px;
+      background: rgba(0,0,0,0.7);
+      padding: 10px;
+      border-radius: 5px;
+    }
+  </style>
 </head>
 <body>
-    <video id="video" playsinline></video>
-    <canvas id="canvas"></canvas>
-    <div id="gestureStatus">Waiting for camera...</div>
+  <div id="container">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="output"></canvas>
+    <canvas id="drawLayer"></canvas>
+    
+    <div id="ui">
+      <button class="gesture-btn" data-mode="draw">Рисование</button>
+      <button class="gesture-btn" data-mode="erase">Ластик</button>
+      <button class="gesture-btn" data-mode="clear">Очистить</button>
+      <input type="color" id="colorPicker" value="#ff0000">
+      <input type="range" id="brushSize" min="1" max="20" value="5">
+    </div>
+    
+    <div id="gesture-hint">Подсказка: Покажите ✊ ✊ ✍️ для активации</div>
+  </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/handpose"></script>
-    <script>
-        let video;
-        let canvas;
-        let ctx;
-        let model;
-        let hands = [];
-        let isDrawing = false;
-        let fistCount = 0;
-        let lastFistTime = 0;
-        let drawingPoints = [];
-        let okGesture = false;
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 
-        async function setupCamera() {
-            video = document.getElementById('video');
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-            video.srcObject = stream;
-            return new Promise(resolve => {
-                video.onloadedmetadata = () => {
-                    video.play();
-                    resolve(video);
-                };
-            });
+  <script>
+    const video = document.getElementById('video');
+    const outputCanvas = document.getElementById('output');
+    const drawCanvas = document.getElementById('drawLayer');
+    const ui = document.getElementById('ui');
+    const gestureHint = document.getElementById('gesture-hint');
+    const colorPicker = document.getElementById('colorPicker');
+    const brushSize = document.getElementById('brushSize');
+
+    let hands, camera;
+    let drawCtx = drawCanvas.getContext('2d');
+    let outputCtx = outputCanvas.getContext('2d');
+    let drawing = false;
+    let lastGestureTime = 0;
+    let gestureSequence = [];
+    let currentColor = '#ff0000';
+    let currentSize = 5;
+    let isEraser = false;
+
+    // Настройки Mediapipe
+    const handsConfig = {
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.7
+    };
+
+    // Инициализация
+    async function init() {
+      // Настройка камеры
+      camera = new Camera(video, {
+        onFrame: async () => {
+          if (!hands) return;
+          await hands.send({ image: video });
+        },
+        width: 1280,
+        height: 720
+      });
+      await camera.start();
+
+      // Настройка MediaPipe Hands
+      hands = new Hands({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+      });
+      hands.setOptions(handsConfig);
+      hands.onResults(onResults);
+
+      // Инициализация canvas
+      resizeCanvas();
+      window.addEventListener('resize', resizeCanvas);
+
+      // Обработчики UI
+      document.querySelectorAll('.gesture-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          document.querySelectorAll('.gesture-btn').forEach(b => b.classList.remove('active'));
+          e.target.classList.add('active');
+          isEraser = e.target.dataset.mode === 'erase';
+        });
+      });
+
+      colorPicker.addEventListener('input', (e) => currentColor = e.target.value);
+      brushSize.addEventListener('input', (e) => currentSize = parseInt(e.target.value));
+    }
+
+    // Основная функция обработки кадров
+    function onResults(results) {
+      resizeCanvas();
+      clearContext(outputCtx);
+      clearContext(drawCtx);
+
+      // Отрисовка видео
+      outputCtx.save();
+      outputCtx.scale(-1, 1);
+      outputCtx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
+      outputCtx.restore();
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        const landmarks = results.multiHandLandmarks[0];
+        const gesture = detectGesture(landmarks);
+        
+        if (gesture) {
+          handleGesture(gesture);
+          showGestureHint(gesture);
         }
 
-        async function loadHandposeModel() {
-            model = await handpose.load();
-            detectHands();
+        drawHandLandmarks(landmarks);
+        drawBoundingBox(landmarks);
+      }
+
+      if (drawing) {
+        drawPath();
+      }
+    }
+
+    // Определение жестов
+    function detectGesture(landmarks) {
+      const thumbTip = landmarks[4];
+      const indexTip = landmarks[8];
+      const wrist = landmarks[0];
+      const pinkyMcp = landmarks[17];
+
+      // Проверка жеста OK
+      const okDistance = Math.hypot(
+        thumbTip.x - indexTip.x,
+        thumbTip.y - indexTip.y
+      );
+      if (okDistance < 0.05) return 'clear';
+
+      // Проверка жеста кулака
+      const fistCheck = landmarks.slice(5, 21).every(p => 
+        Math.hypot(p.x - wrist.x, p.y - wrist.y) < 
+        Math.hypot(pinkyMcp.x - wrist.x, pinkyMcp.y - wrist.y) * 1.2
+      );
+      
+      if (fistCheck) {
+        gestureSequence.push('fist');
+        if (gestureSequence.length > 2) gestureSequence.shift();
+      } else {
+        // Проверка указательного пальца
+        const indexExtended = landmarks[8].y < landmarks[5].y &&
+                             landmarks[8].y < landmarks[6].y &&
+                             landmarks[8].y < landmarks[7].y;
+                             
+        if (indexExtended && gestureSequence.length >= 2) {
+          return 'activate';
         }
+      }
 
-        async function detectHands() {
-            if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                const predictions = await model.estimateHands(video);
-                hands = predictions;
-                handleGestures(predictions);
-            }
-            requestAnimationFrame(detectHands);
-        }
+      return null;
+    }
 
-        function handleGestures(predictions) {
-            const status = document.getElementById('gestureStatus');
-            if (predictions.length > 0) {
-                const hand = predictions[0];
-                const indexTip = hand.annotations.indexFinger[3];
-                const thumbTip = hand.annotations.thumb[3];
-                const palmBase = hand.annotations.palmBase[0];
+    // Обработка распознанных жестов
+    function handleGesture(gesture) {
+      const now = Date.now();
+      if (now - lastGestureTime < 500) return;
+      lastGestureTime = now;
 
-                // Fist detection (index and thumb close to palm base)
-                const distanceToPalm = Math.hypot(
-                    indexTip[0] - palmBase[0],
-                    indexTip[1] - palmBase[1]
-                );
+      switch(gesture) {
+        case 'activate':
+          drawing = true;
+          gestureSequence = [];
+          break;
+        case 'clear':
+          clearCanvas();
+          break;
+      }
+    }
 
-                if (distanceToPalm < 50) {
-                    const currentTime = Date.now();
-                    if (currentTime - lastFistTime > 500) {
-                        fistCount++;
-                        lastFistTime = currentTime;
-                    }
-                }
+    // Отрисовка элементов интерфейса
+    function drawHandLandmarks(landmarks) {
+      drawUtils.drawConnectors(outputCtx, landmarks, HAND_CONNECTIONS, {
+        color: '#00ff00',
+        lineWidth: 2
+      });
+      drawUtils.drawLandmarks(outputCtx, [landmarks[8]], {
+        color: '#ff0000',
+        radius: 5
+      });
+    }
 
-                // Check for double fist then index finger
-                if (fistCount >= 2 && distanceToPalm > 100) {
-                    isDrawing = true;
-                    status.textContent = 'Drawing mode active!';
-                }
+    function drawBoundingBox(landmarks) {
+      const box = calculateBoundingBox(landmarks);
+      outputCtx.strokeStyle = '#00ff00';
+      outputCtx.lineWidth = 3;
+      outputCtx.strokeRect(box.x, box.y, box.width, box.height);
+    }
 
-                // OK gesture (thumb tip and index tip close)
-                const okDistance = Math.hypot(
-                    thumbTip[0] - indexTip[0],
-                    thumbTip[1] - indexTip[1]
-                );
+    function calculateBoundingBox(landmarks) {
+      let minX = Infinity, minY = Infinity;
+      let maxX = -Infinity, maxY = -Infinity;
 
-                if (okDistance < 30 && !okGesture) {
-                    okGesture = true;
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    drawingPoints = [];
-                    status.textContent = 'Canvas cleared!';
-                } else if (okDistance > 50) {
-                    okGesture = false;
-                }
-            }
-        }
+      landmarks.forEach(landmark => {
+        minX = Math.min(minX, landmark.x);
+        minY = Math.min(minY, landmark.y);
+        maxX = Math.max(maxX, landmark.x);
+        maxY = Math.max(maxY, landmark.y);
+      });
 
-        function drawHands() {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            if (hands.length > 0) {
-                const hand = hands[0];
-                const boundingBox = hand.boundingBox;
+      return {
+        x: minX * outputCanvas.width,
+        y: minY * outputCanvas.height,
+        width: (maxX - minX) * outputCanvas.width,
+        height: (maxY - minY) * outputCanvas.height
+      };
+    }
 
-                // Draw green bounding box
-                ctx.strokeStyle = 'green';
-                ctx.lineWidth = 3;
-                ctx.strokeRect(
-                    boundingBox.topLeft[0],
-                    boundingBox.topLeft[1],
-                    boundingBox.bottomRight[0] - boundingBox.topLeft[0],
-                    boundingBox.bottomRight[1] - boundingBox.topLeft[1]
-                );
+    // Функции рисования
+    let path = [];
+    function startPath(x, y) {
+      path = [{ x, y }];
+    }
 
-                if (isDrawing) {
-                    const indexTip = hand.annotations.indexFinger[3];
-                    drawingPoints.push({ x: indexTip[0], y: indexTip[1] });
-                }
-            }
+    function addToPath(x, y) {
+      if (!drawing) return;
+      path.push({ x, y });
+    }
 
-            // Draw the path
-            ctx.strokeStyle = 'black';
-            ctx.lineWidth = 5;
-            ctx.beginPath();
-            drawingPoints.forEach((point, i) => {
-                if (i === 0) ctx.moveTo(point.x, point.y);
-                else ctx.lineTo(point.x, point.y);
-            });
-            ctx.stroke();
+    function drawPath() {
+      if (path.length < 2) return;
 
-            requestAnimationFrame(drawHands);
-        }
+      drawCtx.beginPath();
+      drawCtx.moveTo(path[0].x, path[0].y);
+      
+      for (let i = 1; i < path.length; i++) {
+        const midPoint = getMidPoint(path[i-1], path[i]);
+        drawCtx.quadraticCurveTo(
+          path[i-1].x, 
+          path[i-1].y, 
+          midPoint.x, 
+          midPoint.y
+        );
+      }
 
-        async function init() {
-            await setupCamera();
-            await loadHandposeModel();
-            canvas = document.getElementById('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx = canvas.getContext('2d');
-            drawHands();
-        }
+      drawCtx.strokeStyle = isEraser ? '#ffffff' : currentColor;
+      drawCtx.lineWidth = isEraser ? currentSize * 2 : currentSize;
+      drawCtx.lineCap = 'round';
+      drawCtx.lineJoin = 'round';
+      drawCtx.stroke();
+    }
 
-        init();
-    </script>
+    function getMidPoint(p1, p2) {
+      return {
+        x: (p1.x + p2.x) / 2,
+        y: (p1.y + p2.y) / 2
+      };
+    }
+
+    // Вспомогательные функции
+    function resizeCanvas() {
+      outputCanvas.width = video.videoWidth;
+      outputCanvas.height = video.videoHeight;
+      drawCanvas.width = outputCanvas.width;
+      drawCanvas.height = outputCanvas.height;
+    }
+
+    function clearContext(ctx) {
+      ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    }
+
+    function clearCanvas() {
+      clearContext(drawCtx);
+      path = [];
+    }
+
+    function showGestureHint(gesture) {
+      gestureHint.textContent = `Жест распознан: ${gesture === 'activate' ? 'Рисование' : 'Очистка'}`;
+      gestureHint.style.display = 'block';
+      setTimeout(() => gestureHint.style.display = 'none', 1000);
+    }
+
+    init();
+  </script>
 </body>
 </html>
