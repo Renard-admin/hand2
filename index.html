@@ -157,6 +157,7 @@
         let previousX, previousY;
         // Функции для определения жестов
         function isFingerExtended(landmarks, pipIdx, tipIdx) {
+            if (!landmarks || landmarks.length <= Math.max(pipIdx, tipIdx)) return false;
             const pip = landmarks[pipIdx];
             const tip = landmarks[tipIdx];
             const wrist = landmarks[0];
@@ -165,6 +166,7 @@
             return distTip > distPip * 1.3;
         }
         function isFist(landmarks) {
+            if (!landmarks || landmarks.length < 20) return false;
             const fingers = [
                 { pip: 6, tip: 8 },
                 { pip: 10, tip: 12 },
@@ -176,6 +178,7 @@
             return (!thumbExtended) && otherFingersFolded;
         }
         function isIndexPointing(landmarks) {
+            if (!landmarks || landmarks.length < 8) return false;
             const indexExtended = isFingerExtended(landmarks, 6, 8);
             const otherFingers = [
                 { pip: 10, tip: 12 },
@@ -186,6 +189,7 @@
             return indexExtended && othersFolded;
         }
         function isOkGesture(landmarks) {
+            if (!landmarks || landmarks.length < 8) return false;
             const thumbTip = landmarks[4];
             const indexTip = landmarks[8];
             const dx = thumbTip.x - indexTip.x;
@@ -289,7 +293,7 @@
         async function detectFaces() {
             try {
                 const detections = await faceapi.detectAllFaces(videoElement, new faceapi.TinyFaceDetectorOptions());
-                if (detections.length > 0) {
+                if (detections && detections.length > 0) {
                     detections.forEach(async detection => {
                         const box = detection.box;
                         outputCtx.strokeStyle = 'yellow';
@@ -328,26 +332,28 @@
             if (!cocoSSDModel) return;
             try {
                 const predictions = await cocoSSDModel.detect(videoElement);
-                predictions.forEach(prediction => {
-                    const [x, y, width, height] = prediction.bbox;
-                    let label = prediction.class;
-                    let color = 'yellow';
-                    const dangerousObjects = ['knife', 'gun', 'scissors', 'blade'];
-                    const foodObjects = ['apple', 'banana', 'pizza', 'sandwich', 'cake', 'donut'];
-                    if (dangerousObjects.includes(label)) {
-                        color = 'red';
-                        label = `Опасный: ${label}`;
-                    } else if (foodObjects.includes(label)) {
-                        color = 'green';
-                        label = `Еда: ${label}`;
-                    }
-                    outputCtx.strokeStyle = color;
-                    outputCtx.lineWidth = 2;
-                    outputCtx.strokeRect(x, y, width, height);
-                    outputCtx.font = '14px sans-serif';
-                    outputCtx.fillStyle = color;
-                    outputCtx.fillText(label, x, y - 10);
-                });
+                if(predictions){
+                    predictions.forEach(prediction => {
+                        const [x, y, width, height] = prediction.bbox;
+                        let label = prediction.class;
+                        let color = 'yellow';
+                        const dangerousObjects = ['knife', 'gun', 'scissors', 'blade'];
+                        const foodObjects = ['apple', 'banana', 'pizza', 'sandwich', 'cake', 'donut'];
+                        if (dangerousObjects.includes(label)) {
+                            color = 'red';
+                            label = `Опасный: ${label}`;
+                        } else if (foodObjects.includes(label)) {
+                            color = 'green';
+                            label = `Еда: ${label}`;
+                        }
+                        outputCtx.strokeStyle = color;
+                        outputCtx.lineWidth = 2;
+                        outputCtx.strokeRect(x, y, width, height);
+                        outputCtx.font = '14px sans-serif';
+                        outputCtx.fillStyle = color;
+                        outputCtx.fillText(label, x, y - 10);
+                    });
+                }
             } catch (error) {
                 console.error('Error detecting objects:', error);
             }
